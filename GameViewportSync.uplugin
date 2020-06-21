@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Game Viewport Sync",
+	"Description": "Plugin for Syncing the Primary Viewport PIE session with other viewports",
+	"Category": "Editor",
+	"CreatedBy": "Jack Knobel",
+	"CreatedByURL": "https://jackknobel.com/",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "GameViewportSync",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
