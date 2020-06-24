@@ -16,6 +16,7 @@ UE4 Plugin for syncing the active Play In Editor session with the other Level Ed
 **Getting Started:**
 - Add the plugin to your project ([GameDirectory]/Plugins/) folder (either via cloning or from the releases tab)
 - Open the editor.
+- Enable the Plugin in the Plugins Menu
 - That's it! (You can add additional level editor viewports to the drop down the usual way via Window->Viewports menu)
 
 **Configuration:**
