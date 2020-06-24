@@ -32,7 +32,6 @@ public:
 	 */
 	UPROPERTY(config, EditAnywhere, AdvancedDisplay)
 	float FollowActorSmoothSpeed;
-
 };
 
 // INLINES

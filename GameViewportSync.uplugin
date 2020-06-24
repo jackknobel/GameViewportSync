@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "1.0",
+	"VersionName": "1.1",
 	"FriendlyName": "Game Viewport Sync",
 	"Description": "Plugin for Syncing the Primary Viewport PIE session with other viewports",
 	"Category": "Editor",
@@ -14,11 +14,12 @@
 	"CanContainContent": false,
 	"IsBetaVersion": true,
 	"IsExperimentalVersion": false,
-	"Installed": false,
-	"Modules": [
+	"Installed": true,
+	"Modules": 
+	[
 		{
 			"Name": "GameViewportSync",
-			"Type": "Editor",
+			"Type": "EditorNoCommandlet",
 			"LoadingPhase": "Default"
 		}
 	]

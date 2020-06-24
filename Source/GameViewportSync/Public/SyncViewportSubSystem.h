@@ -6,7 +6,7 @@
 #include "SyncViewportSubsystem.generated.h"
 
 /**
- * 
+ * Subsystem for syncing the PIE world with other Level Editor Viewports
  */
 UCLASS()
 class GAMEVIEWPORTSYNC_API USyncViewportSubsystem : public UEditorSubsystem
@@ -32,10 +32,16 @@ protected:
 	// Only valid during PIE
 	FWorldContext* PIEWorldContext;
 
+	// Override to force all viewports to follow this actor
+	TSoftObjectPtr<AActor> GlobalFollowActorOverride;
+
 	struct FLiveViewportInfo
 	{
-		// Should we be live updating this viewport 
-		bool bLiveUpdate;
+		// Is this the PIE viewport? If it is, we skip applying settings
+		bool bIsPIEViewport;
+		
+		// Should this viewport be syncing with the PIE session
+		bool bSync;
 
 		// The actor the user wants this viewport to follow
 		TSoftObjectPtr<AActor> FollowActor;
@@ -51,11 +57,15 @@ public:
 	void SaveInformationForViewport(FLevelEditorViewportClient* ViewportClient, const FLiveViewportInfo& InfoToSave);
 	void LoadInformationForViewport(FLevelEditorViewportClient* ViewportClient, FLiveViewportInfo& LoadedInfo);
 	
-	virtual void SetViewportLiveTrackState(FLevelEditorViewportClient* ViewportClient, bool bState);
-	virtual bool IsViewportTrackingLiveState(FLevelEditorViewportClient* ViewportClient) const;
+	virtual void SetViewportSyncState(FLevelEditorViewportClient* ViewportClient, bool bState);
+	virtual bool IsViewportSyncing(FLevelEditorViewportClient* ViewportClient) const;
 
-	virtual void SetViewportFollowActor(FLevelEditorViewportClient* ViewportClient, AActor* Actor);
-	virtual bool IsViewportFollowingActor(FLevelEditorViewportClient* ViewportClient, AActor* Actor) const;
+	virtual void SetViewportFollowActor(FLevelEditorViewportClient* ViewportClient, const AActor* Actor);
+	virtual bool IsViewportFollowingActor(FLevelEditorViewportClient* ViewportClient, const AActor* Actor) const;
+
+	void SetGlobalViewportFollowTargetOverride(AActor* FollowTarget);
+
+	const TSoftObjectPtr<AActor>& GetGlobalViewportFollowTargetOverride() const;
 	
 protected:
 	/* Called when there has been a change to the number of level viewports in the editor */
@@ -64,13 +74,14 @@ protected:
 	virtual void ApplyViewportSettings(FLevelEditorViewportClient* const Client, const FLiveViewportInfo& ViewportInfo);
 	virtual void RevertViewportSettings(FLevelEditorViewportClient* const Client, const FLiveViewportInfo& ViewportInfo);
 	
-	void ApplyViewportLiveUpdate(FLevelEditorViewportClient* const ViewportClient);
-	void RevertViewportLiveUpdate(FLevelEditorViewportClient* const ViewportClient);
+	void ApplyViewportSync(FLevelEditorViewportClient* const ViewportClient);
+	void RevertViewportSync(FLevelEditorViewportClient* const ViewportClient);
 
-	void ApplyViewportLockActor(FLevelEditorViewportClient* const ViewportClient, AActor* Actor);
-	void RevertViewportLockedActor(FLevelEditorViewportClient* const ViewportClient);
+	void ApplyViewportFollowActor(FLevelEditorViewportClient* const ViewportClient, const AActor* Actor);
+	void RevertViewportFollowActor(FLevelEditorViewportClient* const ViewportClient);
 	
 	// Begin PIE Callbacks
+	void OnPrePIEBegin(const bool bIsSimulating);
 	void OnPIEPostStarted(const bool bIsSimulating);
 	void OnPIEEnded(const bool bIsSimulating);
 	// End PIE Callbacks
@@ -80,19 +91,36 @@ protected:
 	//////////////////////////////////////////////
 	
 public:
+
+	static const FText SectionExtensionPointText;
+	
 	/* Extension point names */
 	static const FName SectionExtensionPointName;
 	static const FName FollowActorExtensionPointName;
 	static const FName SelectActorExtensionPointName;
 
-protected:
+	void RegisterCommands(TSharedRef<FUICommandList> CommandList);
+	void UnRegisterCommands(TSharedRef<FUICommandList> CommandList);
+
+	static FLevelEditorViewportClient* GetActiveViewportClient();
 	
+	//////////////////////////////////////////////
+	// Viewport Extending
+	//////////////////////////////////////////////
+protected:	
 	virtual TSharedRef<FExtender> OnExtendLevelViewportOptionMenu(const TSharedRef<FUICommandList> CommandList);
 	
 	void BuildMenuListForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient);
 	void CreateFollowActorMenuForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient);
-
 	void BuildCurrentFollowActorWidgetForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient);
+
+	//////////////////////////////////////////////
+	// Context Menu Extending
+	//////////////////////////////////////////////
+protected:
+	void ExtendLevelEditorActorContextMenu();
+	
+	virtual void OnExtendContextMenu(FToolMenuSection& InSection);
 };
 
 // INLINES
@@ -102,20 +130,25 @@ inline const USyncViewportSubsystem::FLiveViewportInfo* USyncViewportSubsystem::
 	return ViewportInfos.Find(ViewportClient);
 }
 
-inline bool USyncViewportSubsystem::IsViewportTrackingLiveState(FLevelEditorViewportClient* ViewportClient) const
+inline bool USyncViewportSubsystem::IsViewportSyncing(FLevelEditorViewportClient* ViewportClient) const
 {
 	if(const FLiveViewportInfo* ViewportInfo = ViewportInfos.Find(ViewportClient))
 	{
-		return ViewportInfo->bLiveUpdate;
+		return ViewportInfo->bSync;
 	}
 	return false;
 }
 
-inline bool USyncViewportSubsystem::IsViewportFollowingActor(FLevelEditorViewportClient* ViewportClient, AActor* Actor) const
+inline bool USyncViewportSubsystem::IsViewportFollowingActor(FLevelEditorViewportClient* ViewportClient, const AActor* Actor) const
 {
 	if(const FLiveViewportInfo* ViewportInfo = ViewportInfos.Find(ViewportClient))
 	{
 		return ViewportInfo->FollowActor == Actor;
 	}
 	return false;
+}
+
+inline const TSoftObjectPtr<AActor>& USyncViewportSubsystem::GetGlobalViewportFollowTargetOverride() const
+{
+	return GlobalFollowActorOverride;
 }

@@ -24,9 +24,11 @@ public class GameViewportSync : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
+				"InputCore",
 				"UnrealEd",
 				"LevelEditor",
 				"EditorStyle",
+				"ToolMenus",
 				"SceneOutliner"
 			}
 			);
