@@ -45,8 +45,7 @@ void USyncViewportSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	// Register our right click menu
 	ExtendLevelEditorActorContextMenu();
-
-	GEditor->OnPostEditorTick().AddUObject(this, &USyncViewportSubsystem::OnPostEditorTick);
+	
 	GEditor->OnLevelViewportClientListChanged().AddUObject(this, &USyncViewportSubsystem::OnLevelViewportClientListChanged);
 	OnLevelViewportClientListChanged();
 
@@ -57,12 +56,6 @@ void USyncViewportSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void USyncViewportSubsystem::OnPostEditorTick(float DeltaTime)
 {
-	if(PIEWorldContext == nullptr)
-	{
-		// Exit we don't need to do any processing
-		return;
-	}
-	
 	const float FollowActorSmoothSpeed = GetDefault<UViewportSyncSettings>()->FollowActorSmoothSpeed;
 	
 	for(auto& ViewportInfo : ViewportInfos)
@@ -129,12 +122,12 @@ void USyncViewportSubsystem::SaveInformationForViewport(FLevelEditorViewportClie
 	// TODO: Saving	
 }
 
-void USyncViewportSubsystem::LoadInformationForViewport(FLevelEditorViewportClient* ViewportClient, FLiveViewportInfo& LoadedInfo)
+USyncViewportSubsystem::FLiveViewportInfo USyncViewportSubsystem::LoadInformationForViewport(FLevelEditorViewportClient* ViewportClient)
 {
 	// TODO: Real Loading
 	
 	const UViewportSyncSettings* ViewportDefault = GetDefault<UViewportSyncSettings>();
-	LoadedInfo = { false, ViewportDefault->bSyncByDefault, nullptr, FVector::ZeroVector };
+	return { ViewportDefault->bSyncByDefault, nullptr };
 }
 
 
@@ -149,6 +142,8 @@ void USyncViewportSubsystem::OnLevelViewportClientListChanged()
 		{
 			SaveInformationForViewport(It.Key(), It.Value());
 
+			RevertViewportSettings(It.Key(), It.Value());
+
 			ViewportInfos.Remove(It.Key());
 		}
 	}
@@ -159,14 +154,183 @@ void USyncViewportSubsystem::OnLevelViewportClientListChanged()
 		if (!ViewportInfos.Contains(LevelViewportClient))
 		{
 			// TODO: Load
-			FLiveViewportInfo LoadedInfo;
-			LoadInformationForViewport(LevelViewportClient, LoadedInfo);
-
-			UE_LOG(LogTemp, Warning, TEXT("%s"), *LevelViewportClient->GetEditorViewportWidget()->ToString());
+			FLiveViewportInfo LoadedInfo = LoadInformationForViewport(LevelViewportClient);
 			
-			ViewportInfos.Add(LevelViewportClient, MoveTemp(LoadedInfo));
+			ViewportInfos.Emplace(LevelViewportClient, MoveTemp(LoadedInfo));
+
+			// We're playing, update all settings
+			if(PIEWorldContext != nullptr)
+			{
+				ApplyViewportSettings(LevelViewportClient, ViewportInfos.FindChecked(LevelViewportClient));
+			}
 		}
 	}
+}
+
+USyncViewportSubsystem::FLiveViewportInfo::FLiveViewportInfo(bool bShouldSync, const TSoftObjectPtr<AActor>& ActorToFollow)
+	: bIsPIEViewport(false)
+	, bSync(bShouldSync)
+	, FollowActor(ActorToFollow)
+	, PreviousFollowLocation(FVector::ZeroVector)
+{}
+
+TSharedRef<SWidget> USyncViewportSubsystem::FLiveViewportInfo::GetOverlayWidget() const
+{
+	// Create on demand
+	if(!OverlayWidget.IsValid())
+	{
+		const USyncViewportSubsystem* ViewportSyncSubSystem = GEditor->GetEditorSubsystem<USyncViewportSubsystem>();
+			
+		SAssignNew(OverlayWidget, SVerticalBox)
+		.Visibility_Lambda([]
+		{
+			if (GetDefault<UViewportSyncSettings>()->bShowOverlay)
+			{
+				return EVisibility::HitTestInvisible;
+			}
+			return EVisibility::Hidden;
+
+		})
+		+ SVerticalBox::Slot()
+		.VAlign(VAlign_Top)
+		.HAlign(HAlign_Center)
+		.AutoHeight()
+		.Padding(2.0f, 1.0f, 2.0f, 1.0f)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("SyncingViewportLablel", "Syncing Viewport"))
+			.Font(FEditorStyle::GetFontStyle(TEXT("MenuItem.Font")))
+			.ColorAndOpacity(FLinearColor(0.4f, 1.0f, 1.0f))
+			.ShadowOffset(FVector2D(1, 1))
+		]
+		+ SVerticalBox::Slot()
+		.VAlign(VAlign_Top)
+		.HAlign(HAlign_Center)
+		.AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			.Visibility_Lambda([this, ViewportSyncSubSystem]
+			{
+				const TSoftObjectPtr<AActor> GlobalFollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
+				const TSoftObjectPtr<AActor> TargetActor = !GlobalFollowActorOverride.IsNull() ? GlobalFollowActorOverride : FollowActor;
+
+				if (TargetActor.IsValid() || TargetActor.IsPending())
+				{
+					return EVisibility::HitTestInvisible;
+				}
+				return EVisibility::Hidden;
+			})
+			+ SHorizontalBox::Slot()
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("FollowingActor", "Following Actor:"))
+				.Font(FEditorStyle::GetFontStyle(TEXT("MenuItem.Font")))
+				.ShadowOffset(FVector2D(1, 1))
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(4.0f, 1.0f, 2.0f, 1.0f)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this, ViewportSyncSubSystem]
+				{
+					const TSoftObjectPtr<AActor> GlobalFollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
+					const TSoftObjectPtr<AActor> TargetActor = !GlobalFollowActorOverride.IsNull() ? GlobalFollowActorOverride : FollowActor;
+					
+					FString FollowActorName;
+
+					if (TargetActor.IsValid())
+					{
+						FollowActorName = FString::Printf(TEXT("Following: '%s'"), *TargetActor->GetActorLabel());
+					}
+					else if (TargetActor.IsPending())
+					{
+						FollowActorName = FString::Printf(TEXT("Waiting for: %s"), *TargetActor.ToSoftObjectPath().GetSubPathString());
+					}
+					else
+					{
+						FollowActorName = TEXT("No follow Actor set");
+					}
+
+					return FText::Format(LOCTEXT("FollowSelectedActor", "{0} {1}"),
+					(
+							!ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride().IsNull() ? FText::FromString("[Override]") : FText::GetEmpty()),
+						FText::FromString(FollowActorName)
+					);
+				})
+				.Font(FEditorStyle::GetFontStyle(TEXT("MenuItem.Font")))
+						.ColorAndOpacity(FLinearColor(0.4f, 1.0f, 1.0f))
+						.ShadowOffset(FVector2D(1, 1))
+			]
+		];
+	}
+
+	return OverlayWidget.ToSharedRef();
+}
+
+//////////////////////////////////////////////
+// PIE Notifications
+//////////////////////////////////////////////
+
+void USyncViewportSubsystem::OnPrePIEBegin(const bool bIsSimulating)
+{
+	/*
+	 * Find and mark our PIE Viewport
+	 */
+
+	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
+	
+	const TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();	
+	const TSharedPtr<FSceneViewport> SharedActiveViewport = ActiveLevelViewport->GetSharedActiveViewport();
+
+	for (auto& ViewportInfo : ViewportInfos)
+	{
+		if(ViewportInfo.Key->Viewport == SharedActiveViewport.Get())
+		{
+			ViewportInfo.Value.bIsPIEViewport = true;
+			break;
+		}
+	}
+}
+
+
+void USyncViewportSubsystem::OnPIEPostStarted(const bool bIsSimulating)
+{
+	PIEWorldContext = GEditor->GetPIEWorldContext();
+	
+	if(PIEWorldContext != nullptr)
+	{		
+		for(auto& ViewportInfo : ViewportInfos)
+		{
+			if (!ViewportInfo.Value.FollowActor.IsNull())
+			{
+				// We reset this so it resolves to the correct PIE instance
+				ViewportInfo.Value.FollowActor.ResetWeakPtr();
+				const_cast<FSoftObjectPath&>(ViewportInfo.Value.FollowActor.ToSoftObjectPath()).FixupForPIE(PIEWorldContext->PIEInstance);
+			}
+		
+			ApplyViewportSettings(ViewportInfo.Key, ViewportInfo.Value);
+		}
+	}
+
+	GEditor->OnPostEditorTick().AddUObject(this, &USyncViewportSubsystem::OnPostEditorTick);
+}
+
+void USyncViewportSubsystem::OnPIEEnded(const bool bIsSimulating)
+{
+	PIEWorldContext = nullptr;
+
+	for(auto& ViewportInfo : ViewportInfos)
+	{
+		RevertViewportSettings(ViewportInfo.Key, ViewportInfo.Value);
+
+		ViewportInfo.Value.bIsPIEViewport = false;
+	}
+
+	// Clear our override so next PIE session they can choose if they want to override it again or not
+	GlobalFollowActorOverride = nullptr;
+
+	GEditor->OnPostEditorTick().RemoveAll(this);
 }
 
 void USyncViewportSubsystem::ApplyViewportSettings(FLevelEditorViewportClient* const Client, const FLiveViewportInfo& ViewportInfo)
@@ -177,6 +341,19 @@ void USyncViewportSubsystem::ApplyViewportSettings(FLevelEditorViewportClient* c
 	if(ViewportInfo.bIsPIEViewport)
 	{
 		return;
+	}
+
+	if(GetDefault<UViewportSyncSettings>()->bShowOverlay)
+	{
+		TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<SLevelViewport>(Client->GetEditorViewportWidget());
+		if(Viewport.IsValid())
+		{
+			Viewport->AddOverlayWidget(ViewportInfo.GetOverlayWidget());
+		}
+		else
+		{
+			UE_LOG(LogViewportSync, Warning, TEXT("Failed to add viewport overlay"));
+		}
 	}
 	
 	if (ViewportInfo.bSync)
@@ -191,7 +368,13 @@ void USyncViewportSubsystem::ApplyViewportSettings(FLevelEditorViewportClient* c
 }
 
 void USyncViewportSubsystem::RevertViewportSettings(FLevelEditorViewportClient* const Client, const FLiveViewportInfo& ViewportInfo)
-{	
+{
+	TSharedPtr<SLevelViewport> Viewport = StaticCastSharedPtr<SLevelViewport>(Client->GetEditorViewportWidget());
+	if(Viewport.IsValid())
+	{
+		Viewport->RemoveOverlayWidget(ViewportInfo.GetOverlayWidget());
+	}
+	
 	if (ViewportInfo.bSync)
 	{
 		RevertViewportSync(Client);
@@ -327,64 +510,6 @@ void USyncViewportSubsystem::RevertViewportFollowActor(FLevelEditorViewportClien
 }
 
 //////////////////////////////////////////////
-// PIE Notifications
-//////////////////////////////////////////////
-
-void USyncViewportSubsystem::OnPrePIEBegin(const bool bIsSimulating)
-{
-	/*
-	 * Find and mark our PIE Viewport
-	 */
-
-	
-	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
-	
-	TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();	
-	TSharedPtr<FSceneViewport> SharedActiveViewport = ActiveLevelViewport->GetSharedActiveViewport();
-
-	for (auto& ViewportInfo : ViewportInfos)
-	{
-		if(ViewportInfo.Key->Viewport == SharedActiveViewport.Get())
-		{
-			ViewportInfo.Value.bIsPIEViewport = true;
-		}
-	}
-}
-
-
-void USyncViewportSubsystem::OnPIEPostStarted(const bool bIsSimulating)
-{
-	PIEWorldContext = GEditor->GetPIEWorldContext();
-	
-	if(PIEWorldContext != nullptr)
-	{		
-		for(auto& ViewportInfo : ViewportInfos)
-		{
-			// We reset this so it resolves to the correct PIE instance
-			ViewportInfo.Value.FollowActor.ResetWeakPtr();
-			const_cast<FSoftObjectPath&>(ViewportInfo.Value.FollowActor.ToSoftObjectPath()).FixupForPIE(PIEWorldContext->PIEInstance);
-			
-			ApplyViewportSettings(ViewportInfo.Key, ViewportInfo.Value);
-		}
-	}
-}
-
-void USyncViewportSubsystem::OnPIEEnded(const bool bIsSimulating)
-{
-	PIEWorldContext = nullptr;
-
-	for(auto& ViewportInfo : ViewportInfos)
-	{
-		RevertViewportSettings(ViewportInfo.Key, ViewportInfo.Value);
-
-		ViewportInfo.Value.bIsPIEViewport = false;
-	}
-
-	// Clear our override so next PIE session they can choose if they want to override it again or not
-	GlobalFollowActorOverride = nullptr;
-}
-
-//////////////////////////////////////////////
 // Editor UI
 //////////////////////////////////////////////
 
@@ -493,7 +618,7 @@ void USyncViewportSubsystem::CreateFollowActorMenuForViewport(FMenuBuilder& Menu
 	{
 		SelectedActor = SelectedActors[0];
 		
-		SelectedActorDisplayName	= FText::Format(LOCTEXT("FollowSelectedActor", "Follow '{0}'"), FText::FromString(SelectedActor->GetHumanReadableName()));
+		SelectedActorDisplayName	= FText::Format(LOCTEXT("FollowSelectedActor", "Follow '{0}'"), FText::FromString(SelectedActor->GetActorLabel()));
 		SelectedActorIcon			= FSlateIconFinder::FindIconForClass(SelectedActor->GetClass());
 	}
 	else
