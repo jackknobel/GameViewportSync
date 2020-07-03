@@ -26,6 +26,10 @@ public:
 	UPROPERTY(config, EditAnywhere)
 	bool bSyncByDefault;
 
+	/* Should we display an overlay with details on the Viewport */
+	UPROPERTY(config, EditAnywhere)
+	bool bShowOverlay;
+
 	/*
 	 * Speed at which our viewports should update to the desired actor target
 	 * This shouldn't be modified unless you *really* need to

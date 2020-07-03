@@ -15,6 +15,7 @@ class GAMEVIEWPORTSYNC_API USyncViewportSubsystem : public UEditorSubsystem
 
 	USyncViewportSubsystem()
 		: PIEWorldContext(nullptr)
+		, GlobalFollowActorOverride(nullptr)
 	{}
 
 protected:
@@ -48,6 +49,15 @@ protected:
 
 		// Used for smoothing the follow
 		FVector PreviousFollowLocation;
+
+	private:
+		// Overlay Widget
+		mutable TSharedPtr<SWidget> OverlayWidget;
+
+	public:
+		FLiveViewportInfo(bool bShouldSync, const TSoftObjectPtr<AActor>& ActorToFollow);
+		
+		TSharedRef<SWidget> GetOverlayWidget() const;
 	};
 	TMap<FLevelEditorViewportClient*, FLiveViewportInfo> ViewportInfos;
 	
@@ -55,7 +65,7 @@ public:
 	const FLiveViewportInfo* GetDataForViewport(FLevelEditorViewportClient* ViewportClient) const;
 
 	void SaveInformationForViewport(FLevelEditorViewportClient* ViewportClient, const FLiveViewportInfo& InfoToSave);
-	void LoadInformationForViewport(FLevelEditorViewportClient* ViewportClient, FLiveViewportInfo& LoadedInfo);
+	FLiveViewportInfo LoadInformationForViewport(FLevelEditorViewportClient* ViewportClient);
 	
 	virtual void SetViewportSyncState(FLevelEditorViewportClient* ViewportClient, bool bState);
 	virtual bool IsViewportSyncing(FLevelEditorViewportClient* ViewportClient) const;
@@ -63,8 +73,10 @@ public:
 	virtual void SetViewportFollowActor(FLevelEditorViewportClient* ViewportClient, const AActor* Actor);
 	virtual bool IsViewportFollowingActor(FLevelEditorViewportClient* ViewportClient, const AActor* Actor) const;
 
+	/* Set the override for all viewports to follow */
 	void SetGlobalViewportFollowTargetOverride(AActor* FollowTarget);
-
+	
+	/* Get the override for all viewports to follow */
 	const TSoftObjectPtr<AActor>& GetGlobalViewportFollowTargetOverride() const;
 	
 protected:
