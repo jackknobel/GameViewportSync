@@ -2,56 +2,33 @@
 
 #include "SyncViewportSubsystem.h"
 #include "ViewportSyncSettings.h"
+#include "ViewportSyncEditorExtender.h"
 
 // UE Includes
 #include "Editor.h"
 #include "IAssetViewport.h"
 #include "LevelEditor.h"
 #include "LevelEditorViewport.h"
-#include "SceneOutlinerModule.h"
 #include "Engine/Selection.h"
-#include "Styling/SlateIconFinder.h"
-#include "SceneOutlinerPublicTypes.h"
 #include "SEditorViewport.h"
 #include "SLevelViewport.h"
-#include "ViewportSyncEditorCommands.h"
 #include "ToolMenus.h"
 #include "Slate/SceneViewport.h"
 
-#define LOCTEXT_NAMESPACE "SyncViewportSubsystem"
-
-static const FName LevelEditorModuleName("LevelEditor");
+#define LOCTEXT_NAMESPACE "ViewportSync"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewportSync, Log, All);
 
-const FText USyncViewportSubsystem::SectionExtensionPointText(LOCTEXT("ViewportSync", "Viewport Sync"));
-
-const FName USyncViewportSubsystem::SectionExtensionPointName("ViewportSync");
-const FName USyncViewportSubsystem::FollowActorExtensionPointName("ViewportSync_FollowActor");
-const FName USyncViewportSubsystem::SelectActorExtensionPointName("ViewportSync_SelectActor");
-
 void USyncViewportSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-	FViewportSyncEditorCommands::Register();
-
-	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
-
-	TSharedRef<FUICommandList> CommandList = LevelEditorModule.GetGlobalLevelEditorActions();
-	RegisterCommands(CommandList);
-
-	// Register our viewport drop down extension
-	const FLevelEditorModule::FLevelEditorMenuExtender ViewportExtender = FLevelEditorModule::FLevelEditorMenuExtender::CreateUObject(this, &USyncViewportSubsystem::OnExtendLevelViewportOptionMenu);
-	LevelEditorModule.GetAllLevelViewportOptionsMenuExtenders().Add(ViewportExtender);
-
-	// Register our right click menu
-	ExtendLevelEditorActorContextMenu();
-	
 	GEditor->OnLevelViewportClientListChanged().AddUObject(this, &USyncViewportSubsystem::OnLevelViewportClientListChanged);
 	OnLevelViewportClientListChanged();
 
 	FEditorDelegates::PreBeginPIE.AddUObject(this, &USyncViewportSubsystem::OnPrePIEBegin);
 	FEditorDelegates::PostPIEStarted.AddUObject(this, &USyncViewportSubsystem::OnPIEPostStarted);
 	FEditorDelegates::EndPIE.AddUObject(this, &USyncViewportSubsystem::OnPIEEnded);
+
+	EditorExtender = MakeShared<FViewportSyncEditorExtender>(*this);
 }
 
 void USyncViewportSubsystem::OnPostEditorTick(float DeltaTime)
@@ -104,17 +81,14 @@ void USyncViewportSubsystem::OnPostEditorTick(float DeltaTime)
 
 void USyncViewportSubsystem::Deinitialize()
 {
+	EditorExtender.Reset();
+	
 	GEditor->OnPostEditorTick().RemoveAll(this);
 	GEditor->OnLevelViewportClientListChanged().RemoveAll(this);
 
 	FEditorDelegates::PreBeginPIE.RemoveAll(this);
 	FEditorDelegates::PostPIEStarted.RemoveAll(this);
 	FEditorDelegates::EndPIE.RemoveAll(this);
-
-	if (FLevelEditorModule* LevelEditorModule = FModuleManager::GetModulePtr<FLevelEditorModule>(LevelEditorModuleName))
-	{
-		UnRegisterCommands(LevelEditorModule->GetGlobalLevelEditorActions());
-	}
 }
 
 void USyncViewportSubsystem::SaveInformationForViewport(FLevelEditorViewportClient* ViewportClient, const FLiveViewportInfo& InfoToSave)
@@ -211,8 +185,8 @@ TSharedRef<SWidget> USyncViewportSubsystem::FLiveViewportInfo::GetOverlayWidget(
 			SNew(SHorizontalBox)
 			.Visibility_Lambda([this, ViewportSyncSubSystem]
 			{
-				const TSoftObjectPtr<AActor> GlobalFollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
-				const TSoftObjectPtr<AActor> TargetActor = !GlobalFollowActorOverride.IsNull() ? GlobalFollowActorOverride : FollowActor;
+				const TSoftObjectPtr<AActor> FollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
+				const TSoftObjectPtr<AActor> TargetActor = !FollowActorOverride.IsNull() ? FollowActorOverride : FollowActor;
 
 				if (TargetActor.IsValid() || TargetActor.IsPending())
 				{
@@ -234,8 +208,8 @@ TSharedRef<SWidget> USyncViewportSubsystem::FLiveViewportInfo::GetOverlayWidget(
 				SNew(STextBlock)
 				.Text_Lambda([this, ViewportSyncSubSystem]
 				{
-					const TSoftObjectPtr<AActor> GlobalFollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
-					const TSoftObjectPtr<AActor> TargetActor = !GlobalFollowActorOverride.IsNull() ? GlobalFollowActorOverride : FollowActor;
+					const TSoftObjectPtr<AActor> FollowActorOverride = ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride();
+					const TSoftObjectPtr<AActor> TargetActor = !FollowActorOverride.IsNull() ? FollowActorOverride : FollowActor;
 					
 					FString FollowActorName;
 
@@ -254,8 +228,8 @@ TSharedRef<SWidget> USyncViewportSubsystem::FLiveViewportInfo::GetOverlayWidget(
 
 					return FText::Format(LOCTEXT("FollowSelectedActor", "{0} {1}"),
 					(
-							!ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride().IsNull() ? FText::FromString("[Override]") : FText::GetEmpty()),
-						FText::FromString(FollowActorName)
+							!ViewportSyncSubSystem->GetGlobalViewportFollowTargetOverride().IsNull() ? FText::FromString("[Override]") : FText::GetEmpty())
+							, FText::FromString(FollowActorName)
 					);
 				})
 				.Font(FEditorStyle::GetFontStyle(TEXT("MenuItem.Font")))
@@ -278,7 +252,7 @@ void USyncViewportSubsystem::OnPrePIEBegin(const bool bIsSimulating)
 	 * Find and mark our PIE Viewport
 	 */
 
-	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
+	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(FViewportSyncEditorExtender::LevelEditorModuleName);
 	
 	const TSharedPtr<SLevelViewport> ActiveLevelViewport = LevelEditorModule.GetFirstActiveLevelViewport();	
 	const TSharedPtr<FSceneViewport> SharedActiveViewport = ActiveLevelViewport->GetSharedActiveViewport();
@@ -507,270 +481,6 @@ void USyncViewportSubsystem::RevertViewportFollowActor(FLevelEditorViewportClien
 		// This is *actually* a toggle so only apply when we're locked and also turns off orbit camera
 		ViewportClient->SetCameraLock();
 	}
-}
-
-//////////////////////////////////////////////
-// Editor UI
-//////////////////////////////////////////////
-
-FLevelEditorViewportClient* USyncViewportSubsystem::GetActiveViewportClient()
-{
-	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
-	TSharedPtr<ILevelEditor> LevelEditor = LevelEditorModule.GetLevelEditorInstance().Pin();
-
-	return static_cast<FLevelEditorViewportClient*>(&LevelEditor->GetActiveViewportInterface()->GetAssetViewportClient());
-}
-
-void USyncViewportSubsystem::RegisterCommands(TSharedRef<FUICommandList> CommandList)
-{
-	CommandList->MapAction(FViewportSyncEditorCommands::Get().ToggleViewportSync,
-		FExecuteAction::CreateLambda([this]
-		{
-			if(FLevelEditorViewportClient* ViewportClient = GetActiveViewportClient())
-			{
-				SetViewportSyncState(ViewportClient, !IsViewportSyncing(ViewportClient));
-			}		
-		}),
-		FCanExecuteAction::CreateLambda([]{ return true; }),
-		FGetActionCheckState::CreateLambda([this]()
-		{
-			return IsViewportSyncing(GetActiveViewportClient()) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-		})
-	);
-
-	CommandList->MapAction(FViewportSyncEditorCommands::Get().FollowActor,
-		FExecuteAction::CreateLambda([this]
-		{
-			TArray<AActor*> SelectedActors;
-			GEditor->GetSelectedActors()->GetSelectedObjects(SelectedActors);
-			
-			FLevelEditorViewportClient* ViewportClient = GetActiveViewportClient();
-			
-			if(SelectedActors.Num() > 0 && ViewportClient != nullptr)
-			{
-				SetViewportFollowActor(ViewportClient, SelectedActors[0]);
-			}	
-		})
-	);
-}
-
-void USyncViewportSubsystem::UnRegisterCommands(TSharedRef<FUICommandList> CommandList)
-{
-	CommandList->UnmapAction(FViewportSyncEditorCommands::Get().ToggleViewportSync);
-	CommandList->UnmapAction(FViewportSyncEditorCommands::Get().FollowActor);
-}
-
-TSharedRef<FExtender> USyncViewportSubsystem::OnExtendLevelViewportOptionMenu(const TSharedRef<FUICommandList> CommandList)
-{
-	FLevelEditorModule& LevelEditorModule			= FModuleManager::GetModuleChecked<FLevelEditorModule>(LevelEditorModuleName);
-	TSharedPtr<ILevelEditor> LevelEditor			= LevelEditorModule.GetLevelEditorInstance().Pin();
-	FLevelEditorViewportClient* ViewportClient		= static_cast<FLevelEditorViewportClient*>(&LevelEditor->GetActiveViewportInterface()->GetAssetViewportClient());
-
-	static const FName ExtensionPoint("LevelViewportViewportOptions");
-	
-	TSharedRef<FExtender> Extender = MakeShared<FExtender>();
-	Extender->AddMenuExtension(
-		ExtensionPoint,
-		EExtensionHook::After,
-		nullptr,
-		FMenuExtensionDelegate::CreateUObject(this, &USyncViewportSubsystem::BuildMenuListForViewport, ViewportClient)
-	);
-	return Extender;
-}
-
-void USyncViewportSubsystem::BuildMenuListForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient)
-{	
-	MenuBuilder.BeginSection(USyncViewportSubsystem::SectionExtensionPointName, USyncViewportSubsystem::SectionExtensionPointText);
-	{		
-		// Enable or Disable Viewport Syncing
-		MenuBuilder.AddMenuEntry(FViewportSyncEditorCommands::Get().ToggleViewportSync);
-
-		FUIAction FollowActorSubMenu;
-		FollowActorSubMenu.CanExecuteAction.BindUObject(this, &USyncViewportSubsystem::IsViewportSyncing, ViewportClient);
-		
-		// Follow Actor SubMenu
-		MenuBuilder.AddSubMenu(
-			LOCTEXT("FollowActor", "Follow Actor"),
-			LOCTEXT("FollowActorTooltip", "Select an actor for this Viewport to follow"),
-			FNewMenuDelegate::CreateUObject(this, &USyncViewportSubsystem::CreateFollowActorMenuForViewport, ViewportClient),
-			FollowActorSubMenu,
-			USyncViewportSubsystem::FollowActorExtensionPointName,
-			EUserInterfaceActionType::Button
-		);
-
-		BuildCurrentFollowActorWidgetForViewport(MenuBuilder, ViewportClient);
-	}
-	MenuBuilder.EndSection();
-}
-
-void USyncViewportSubsystem::CreateFollowActorMenuForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient)
-{
-	// Set up a menu entry to add the selected actor(s) to the sequencer
-	TArray<AActor*> SelectedActors;
-	GEditor->GetSelectedActors()->GetSelectedObjects(SelectedActors);
-
-	AActor* SelectedActor = nullptr;
-
-	FText SelectedActorDisplayName;
-	FSlateIcon SelectedActorIcon;
-	
-	if (SelectedActors.Num() > 0)
-	{
-		SelectedActor = SelectedActors[0];
-		
-		SelectedActorDisplayName	= FText::Format(LOCTEXT("FollowSelectedActor", "Follow '{0}'"), FText::FromString(SelectedActor->GetActorLabel()));
-		SelectedActorIcon			= FSlateIconFinder::FindIconForClass(SelectedActor->GetClass());
-	}
-	else
-	{
-		SelectedActorIcon = FSlateIconFinder::FindIconForClass(AActor::StaticClass());;
-	}
-
-	if (!SelectedActorDisplayName.IsEmpty())
-	{
-		MenuBuilder.AddMenuEntry(
-			FViewportSyncEditorCommands::Get().FollowActor,
-			NAME_None,
-			SelectedActorDisplayName, 
-			FText(), 
-			SelectedActorIcon
-		);
-	}
-
-	/* Scene outliner for picking a follow actor */
-	MenuBuilder.BeginSection(USyncViewportSubsystem::SelectActorExtensionPointName, LOCTEXT("SelectFollowActor", "Select Actor to Follow:"));
-	{
-		using namespace SceneOutliner;
-
-		FInitializationOptions InitOptions;
-		{
-			InitOptions.Mode = ESceneOutlinerMode::ActorPicker;
-
-			// We hide the header row to keep the UI compact.
-			InitOptions.bShowHeaderRow = false;
-			InitOptions.bShowSearchBox = true;
-			InitOptions.bShowCreateNewFolder = false;
-			InitOptions.bFocusSearchBoxWhenOpened = true;
-
-			// Only want the actor label column
-			InitOptions.ColumnMap.Add(FBuiltInColumnTypes::Label(), FColumnInfo(EColumnVisibility::Visible, 0));
-		}
-
-		// actor selector to allow the user to choose an actor
-		static const FName SceneOutlinerModuleName("SceneOutliner");
-		
-		FSceneOutlinerModule& SceneOutlinerModule = FModuleManager::LoadModuleChecked<FSceneOutlinerModule>(SceneOutlinerModuleName);
-		const TSharedRef< SWidget > MiniSceneOutliner =
-			SNew(SBox)
-			.MaxDesiredHeight(400.0f)
-			.WidthOverride(300.0f)
-			[
-				SceneOutlinerModule.CreateSceneOutliner
-				(
-					InitOptions,
-					FOnActorPicked::CreateLambda([this, ViewportClient](AActor* SelectedActor)
-					{
-						FSlateApplication::Get().DismissAllMenus();
-						this->SetViewportFollowActor(ViewportClient, SelectedActor);
-					})
-				)
-			];
-
-		MenuBuilder.AddWidget(MiniSceneOutliner, FText::GetEmpty(), true);
-	}
-	
-	MenuBuilder.EndSection();
-}
-
-void USyncViewportSubsystem::BuildCurrentFollowActorWidgetForViewport(FMenuBuilder& MenuBuilder, FLevelEditorViewportClient* ViewportClient)
-{
-	const FLiveViewportInfo* ViewportInfo = GetDataForViewport(ViewportClient);
-
-	const auto ActorName = [ViewportInfo, &GlobalFollowActorOverride = GlobalFollowActorOverride]()
-	{
-		FString SelectedActorDetail;
-
-		const TSoftObjectPtr<AActor> TargetActor = !GlobalFollowActorOverride.IsNull() ? GlobalFollowActorOverride : ViewportInfo->FollowActor;
-		
-		if (TargetActor.IsValid())
-		{
-			SelectedActorDetail = FString::Printf(TEXT("Following: '%s'"), *TargetActor->GetActorLabel());
-		}
-		else if (TargetActor.IsPending())
-		{
-			SelectedActorDetail = FString::Printf(TEXT("Waiting for: %s"), *TargetActor.ToSoftObjectPath().GetSubPathString());
-		}
-		else
-		{
-			SelectedActorDetail = TEXT("No follow Actor set");
-		}
-
-		return FText::Format(LOCTEXT("FollowSelectedActor", "{0} {1}"), (!GlobalFollowActorOverride.IsNull() ? FText::FromString("[Override]") : FText::GetEmpty()), FText::FromString(SelectedActorDetail));
-	};
-	
-	MenuBuilder.AddWidget(
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.Padding(0.0f)
-		.VAlign(VAlign_Center)
-		.HAlign(HAlign_Fill)
-		[
-			SNew(SButton)
-				.HAlign(HAlign_Fill)
-				.OnPressed_Lambda([FollowedActor = ViewportInfo->FollowActor]()
-				{
-					GEditor->SelectActor(FollowedActor.Get(), true, true);
-				})
-				.ForegroundColor(FSlateColor::UseForeground())
-				.ButtonStyle(FEditorStyle::Get(), "NoBorder")
-				.ContentPadding(0.0f)
-				.Text_Lambda(ActorName)
-		]
-		+ SHorizontalBox::Slot()
-		.VAlign(VAlign_Center)
-		.HAlign(HAlign_Right)
-		[
-				SNew(SButton)
-				.OnPressed_Lambda([this, ViewportClient]()
-				{
-					this->SetViewportFollowActor(ViewportClient, nullptr);
-				})
-				.Visibility_Lambda([this, ViewportClient, ViewportInfo]()
-				{
-					if (IsViewportSyncing(ViewportClient) && !ViewportInfo->FollowActor.IsNull())
-					{
-						return EVisibility::Visible;
-					}
-					return EVisibility::Hidden;
-				})
-				.ForegroundColor(FSlateColor::UseForeground())
-				.HAlign(HAlign_Fill)
-				.ToolTipText(LOCTEXT("ClearFollow", "Remove followed Actor"))
-				.ButtonStyle(FEditorStyle::Get(), "NoBorder")
-				.Content()
-				[			
-					SNew(SImage)
-					.Image(FEditorStyle::GetBrush("PropertyWindow.Button_Clear"))
-				]
-
-		],
-		FText::GetEmpty()
-	);
-}
-
-void USyncViewportSubsystem::ExtendLevelEditorActorContextMenu()
-{
-	static const FName MenuName("LevelEditor.ActorContextMenu");
-	
-	UToolMenu* Menu = UToolMenus::Get()->ExtendMenu(MenuName);
-	FToolMenuSection& Section = Menu->AddSection(USyncViewportSubsystem::SectionExtensionPointName, USyncViewportSubsystem::SectionExtensionPointText);
-	Section.AddDynamicEntry("ViewportSyncEditorCommands", FNewToolMenuSectionDelegate::CreateUObject(this, &USyncViewportSubsystem::OnExtendContextMenu));
-}
-
-void USyncViewportSubsystem::OnExtendContextMenu(FToolMenuSection& InSection)
-{
-	InSection.AddMenuEntry(FViewportSyncEditorCommands::Get().FollowActor);
 }
 
 #undef LOCTEXT_NAMESPACE
