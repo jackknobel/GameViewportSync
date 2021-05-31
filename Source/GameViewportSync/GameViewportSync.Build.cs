@@ -29,7 +29,10 @@ public class GameViewportSync : ModuleRules
 				"LevelEditor",
 				"EditorStyle",
 				"ToolMenus",
-				"SceneOutliner"
+				"SceneOutliner",
+#if UE_4_26_OR_LATER
+				"DeveloperSettings"
+#endif
 			}
 			);
 	}
