@@ -189,12 +189,8 @@ void FViewportSyncEditorExtender::CreateFollowActorMenuForViewport(FMenuBuilder&
 	/* Scene outliner for picking a follow actor */
 	MenuBuilder.BeginSection(FViewportSyncEditorExtender::SelectActorExtensionPointName, LOCTEXT("SelectFollowActor", "Select Actor to Follow:"));
 	{
-		using namespace SceneOutliner;
-
-		FInitializationOptions InitOptions;
+		FSceneOutlinerInitializationOptions InitOptions;
 		{
-			InitOptions.Mode = ESceneOutlinerMode::ActorPicker;
-
 			// We hide the header row to keep the UI compact.
 			InitOptions.bShowHeaderRow = false;
 			InitOptions.bShowSearchBox = true;
@@ -202,7 +198,7 @@ void FViewportSyncEditorExtender::CreateFollowActorMenuForViewport(FMenuBuilder&
 			InitOptions.bFocusSearchBoxWhenOpened = true;
 
 			// Only want the actor label column
-			InitOptions.ColumnMap.Add(FBuiltInColumnTypes::Label(), FColumnInfo(EColumnVisibility::Visible, 0));
+			InitOptions.ColumnMap.Add(FSceneOutlinerBuiltInColumnTypes::Label(), FSceneOutlinerColumnInfo(ESceneOutlinerColumnVisibility::Visible, 0));
 		}
 
 		// actor selector to allow the user to choose an actor
@@ -214,7 +210,7 @@ void FViewportSyncEditorExtender::CreateFollowActorMenuForViewport(FMenuBuilder&
 			.MaxDesiredHeight(400.0f)
 			.WidthOverride(300.0f)
 			[
-				SceneOutlinerModule.CreateSceneOutliner
+				SceneOutlinerModule.CreateActorPicker
 				(
 					InitOptions,
 					FOnActorPicked::CreateLambda([OwningSubsystem = this->OwningSubsystem, ViewportClient](AActor* SelectedActor)
